@@ -1,0 +1,374 @@
+import math
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+
+
+FILE_PATH = 'Acute1_4_CanThoInput.txt' # Tên file dữ liệu
+K_NEIGHBORS = 20                      # Tham số k láng giềng
+DUNG_CAI_TIEN = True                  # True = Trung bình điều hòa, False = Gốc
+def thu_thap_du_lieu(file_path):
+    X = []
+    ids = []
+    try:
+        with open(file_path, 'r') as file:
+            la_dong_dau_tien = True
+            for line in file:
+                if la_dong_dau_tien:
+                    la_dong_dau_tien = False
+                    continue
+                line = line.strip()
+                if not line: continue
+                parts = line.split()
+                X.append([float(parts[1]), float(parts[2])])
+                ids.append(parts[0])
+        return X, ids
+    except FileNotFoundError:
+        print("Lỗi: Không tìm thấy file.")
+        return None, None
+
+
+def xu_ly_du_lieu(X):
+    n_pts = len(X)
+    so_dac_trung = len(X[0])
+
+    # Chuẩn hóa Min-Max
+    min_val = [float('inf')] * so_dac_trung
+    max_val = [-float('inf')] * so_dac_trung
+    for i in range(n_pts):
+        for j in range(so_dac_trung):
+            if X[i][j] < min_val[j]: min_val[j] = X[i][j]
+            if X[i][j] > max_val[j]: max_val[j] = X[i][j]
+
+    X_norm = [[0.0] * so_dac_trung for _ in range(n_pts)]
+    for i in range(n_pts):
+        for j in range(so_dac_trung):
+            mau_so = max_val[j] - min_val[j]
+            X_norm[i][j] = (X[i][j] - min_val[j]) / mau_so if mau_so > 0 else 0
+
+    # Tính ma trận
+    def tinh_khoang_cach(p1, p2): return math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
+    dist_matrix = [[0.0] * n_pts for _ in range(n_pts)]
+    S = [[0.0] * n_pts for _ in range(n_pts)]
+    for i in range(n_pts):
+        for j in range(n_pts):
+            dist_matrix[i][j] = tinh_khoang_cach(X_norm[i], X_norm[j])
+            S[i][j] = 1 - (dist_matrix[i][j] / (dist_matrix[i][j] + 1))
+    return X_norm, dist_matrix, S
+
+
+def xaydung_mang_mknn(dist_matrix, k_val):
+    n_pts = len(dist_matrix)
+    knn = []
+    for i in range(n_pts):
+        dists_with_index = [(dist_matrix[i][j], j) for j in range(n_pts) if i != j]
+        dists_with_index.sort()
+        knn.append([dists_with_index[m][1] for m in range(k_val)])
+    rnn = [[] for _ in range(n_pts)]
+    for i in range(n_pts):
+        for neighbor in knn[i]: rnn[neighbor].append(i)
+    mknn = [[] for _ in range(n_pts)]
+    for i in range(n_pts):
+        intersect = [val for val in knn[i] if val in rnn[i]]
+        mknn[i] = intersect if len(intersect) > 0 else knn[i][:math.ceil(k_val/2)]
+    return mknn
+
+
+def tinh_rho_delta_gamma(dist_matrix, mknn, dung_trung_binh_dieu_hoa=False):
+    n_pts = len(dist_matrix)
+
+    # Tính rho
+    rho = [0.0] * n_pts
+    for i in range(n_pts):
+        sum_dist = sum(dist_matrix[i][nb] for nb in mknn[i])
+        rho[i] = (len(mknn[i]) ** 2) / sum_dist if sum_dist > 0 else 0
+
+    # Tính delta
+    delta = [0.0] * n_pts
+    rho_kem_chi_so = sorted([(rho[i], i) for i in range(n_pts)], reverse=True)
+
+    diem_max_rho = rho_kem_chi_so[0][1]
+    delta[diem_max_rho] = max(dist_matrix[diem_max_rho])
+
+    for i in range(1, n_pts):
+        idx_curr = rho_kem_chi_so[i][1]
+        ds = []
+
+        for j in range(i):
+            idx_truoc = rho_kem_chi_so[j][1]
+
+            if rho[idx_truoc] > rho[idx_curr]:
+                ds.append(dist_matrix[idx_curr][idx_truoc])
+
+            elif dist_matrix[idx_curr][idx_truoc] == 0:
+                ds.append(0)
+
+        delta[idx_curr] = min(ds) if ds else max(dist_matrix[idx_curr])
+
+    # Tính gamma
+    gamma_list = []
+
+    for i in range(n_pts):
+
+        if dung_trung_binh_dieu_hoa:
+            mau_so = rho[i] + delta[i]
+            gamma_val = (2 * rho[i] * delta[i]) / mau_so if mau_so > 0 else 0
+        else:
+            gamma_val = rho[i] * delta[i]
+
+        gamma_list.append((gamma_val, i, rho[i], delta[i]))
+
+    gamma_list.sort(key=lambda x: x[0], reverse=True)
+
+    return rho, delta, gamma_list
+    # === THỰC THI TEST PHẦN 3.2 ===
+print("ĐANG TÍNH RHO, DELTA VÀ GAMMA...")
+
+rho, delta, gamma_list = tinh_rho_delta_gamma(
+    dist_matrix,
+    mknn,
+    DUNG_CAI_TIEN
+)
+
+
+    # TEST GAMMA
+# ==========================================
+print("\nBẢNG TOP 20 GAMMA CAO NHẤT")
+print("(Quan sát bước nhảy Gamma để chọn số cụm)")
+
+print(f"{'Hạng':^5} | {'PoiID':^8} | {'Gamma':^16} | {'Rho':^14} | {'Delta':^12}")
+print("-" * 67)
+
+for h in range(min(20, len(gamma_list))):
+
+    g_val, idx, r_val, d_val = gamma_list[h]
+
+    print(
+        f"{h+1:^5} | "
+        f"{ids[idx]:^8} | "
+        f"{g_val:^16.4f} | "
+        f"{r_val:^14.4f} | "
+        f"{d_val:^12.4f}"
+    )
+def lan_truyen_vung_loi_bfs(dist_matrix, mknn, gamma_list, n_clusters):
+    n_pts = len(dist_matrix)
+    labels = [0] * n_pts
+    cluster_centers = []
+
+    # 1. Khởi tạo tâm cụm từ danh sách Gamma cao nhất
+    for i in range(n_clusters):
+        score, point_idx, r_val, d_val = gamma_list[i]
+        cluster_centers.append(point_idx)
+        labels[point_idx] = i + 1
+
+    # 2. Lan truyền vùng lõi bằng BFS
+    for ci in cluster_centers:
+        Que = []
+        lci = labels[ci]
+        for neighbor in mknn[ci]:
+            if labels[neighbor] == 0:
+                labels[neighbor] = lci
+                Que.append(neighbor)
+        while len(Que) > 0:
+            xq = Que[0]
+            tong_khoang_cach = sum(dist_matrix[xq][xj] for xj in mknn[xq])
+            so_luong_mknn = len(mknn[xq])
+            khoang_cach_trung_binh = tong_khoang_cach / so_luong_mknn if so_luong_mknn > 0 else 0
+            for xp in mknn[xq]:
+                if labels[xp] == 0 and dist_matrix[xp][xq] <= khoang_cach_trung_binh:
+                    labels[xp] = lci
+                    Que.append(xp)
+            Que.pop(0)
+
+    return labels, cluster_centers
+def lan_truyen_xac_suat(dist_matrix, S, mknn, labels, n_clusters):
+    n = len(dist_matrix)
+
+    # Tập các điểm chưa được gán nhãn sau thuật toán BFS
+    Dn = [i for i in range(n) if labels[i] == 0]
+
+    # Ma trận xác suất thuộc cụm P và ma trận lưu xác suất max MP
+    P = [[0.0] * (n_clusters + 1) for _ in range(n)]
+    MP = [[0.0, 0] for _ in range(n)]
+
+    # Tính xác suất ban đầu cho từng điểm chưa gán
+    for xi in Dn:
+        for t in range(1, n_clusters + 1):
+            p_ict = 0.0
+            for xj in mknn[xi]:
+                if labels[xj] == t:
+                    mau_so = sum(S[q][xj] for q in mknn[xj])
+                    w_ij = S[xi][xj] / mau_so if mau_so > 0 else 0.0
+                    p_ict += w_ij * S[xi][xj]
+            P[xi][t] = p_ict
+
+        tong_P_xi = sum(P[xi])
+        if tong_P_xi > 0:
+            for t in range(1, n_clusters + 1):
+                P[xi][t] = P[xi][t] / tong_P_xi
+
+        max_prob = max(P[xi][1:])
+        best_cluster = P[xi].index(max_prob, 1) if max_prob > 0 else 0
+        MP[xi][0] = max_prob
+        MP[xi][1] = best_cluster
+
+    # Tìm điểm có xác suất lớn nhất để bắt đầu gán
+    best_p = -1
+    max_val = -1.0
+    for i in Dn:
+        if MP[i][0] > max_val:
+            max_val = MP[i][0]
+            best_p = i
+
+    flag = 1 if best_p != -1 and P[best_p][MP[best_p][1]] != 0 else 0
+
+    # Vòng lặp gán nhãn xác suất lan truyền
+    while flag == 1:
+        p = best_p
+        labels[p] = MP[p][1]
+        for t in range(1, n_clusters + 1):
+            P[p][t] = 0.0
+        MP[p] = [0.0, 0]
+
+        # Cập nhật xác suất cho các điểm lân cận chưa gán nhãn
+        for xq in mknn[p]:
+            if labels[xq] == 0:
+                mau_so = sum(S[nb][p] for nb in mknn[p])
+                w_pq = S[xq][p] / mau_so if mau_so > 0 else 0.0
+                cluster_q = MP[xq][1]
+                if cluster_q != 0:
+                    P[xq][cluster_q] += w_pq * S[xq][p]
+
+                max_prob_q = max(P[xq][1:])
+                best_cluster_q = P[xq].index(max_prob_q, 1) if max_prob_q > 0 else 0
+                MP[xq][0] = max_prob_q
+                MP[xq][1] = best_cluster_q
+
+        # Tìm lại điểm có xác suất lớn nhất trong tập còn lại
+        best_p = -1
+        max_val = -1.0
+        for i in Dn:
+            if labels[i] == 0 and MP[i][0] > max_val:
+                max_val = MP[i][0]
+                best_p = i
+
+        if best_p == -1 or P[best_p][MP[best_p][1]] == 0:
+            flag = 0
+
+    # Giai đoạn vét cạn: Gán nốt các điểm cô lập (nếu có) theo láng giềng đã có nhãn
+    while True:
+        co_thay_doi = False
+        for xj in Dn:
+            if labels[xj] == 0:
+                for xl in mknn[xj]:
+                    if labels[xl] != 0:
+                        labels[xj] = labels[xl]
+                        co_thay_doi = True
+                        break
+        if not co_thay_doi:
+            break
+
+    # Chốt chặn cuối cùng (nếu dữ liệu quá nhiễu, điểm hoàn toàn cô lập)
+    for xj in Dn:
+        if labels[xj] == 0:
+            labels[xj] = 1
+
+    return labels
+def calculate_internal_metrics(X_norm, labels, dist_matrix):
+    X_data = np.array(X_norm)
+    labels_arr = np.array(labels)
+    unique_labels = np.unique(labels_arr)
+
+    if len(unique_labels) < 2: return None
+
+    sil = silhouette_score(X_data, labels_arr)
+    db = davies_bouldin_score(X_data, labels_arr)
+    ch = calinski_harabasz_score(X_data, labels_arr)
+
+    overall_mean = np.mean(X_data, axis=0)
+    wss = 0
+    bss = 0
+    for cluster in unique_labels:
+        cluster_points = X_data[labels_arr == cluster]
+        cluster_mean = np.mean(cluster_points, axis=0)
+        wss += np.sum((cluster_points - cluster_mean)**2)
+        bss += len(cluster_points) * np.sum((cluster_mean - overall_mean)**2)
+
+    wb = wss / bss if bss != 0 else 0
+
+    def dunn_index(labels_array, dist_mtx, unq_labels):
+        intra_dist = []
+        inter_dist = []
+        for i in unq_labels:
+            idx = np.where(labels_array == i)[0]
+            if len(idx) > 1:
+                max_d = 0
+                for a in range(len(idx)):
+                    for b in range(a + 1, len(idx)):
+                        d = dist_mtx[idx[a]][idx[b]]
+                        if d > max_d: max_d = d
+                intra_dist.append(max_d)
+
+            for j in unq_labels:
+                if i < j:
+                    idx_i = np.where(labels_array == i)[0]
+                    idx_j = np.where(labels_array == j)[0]
+                    min_d = float('inf')
+                    for a in idx_i:
+                        for b in idx_j:
+                            if dist_mtx[a][b] < min_d: min_d = dist_mtx[a][b]
+                    inter_dist.append(min_d)
+
+        return min(inter_dist) / max(intra_dist) if intra_dist and inter_dist else 0
+
+    dunn = dunn_index(labels_arr, dist_matrix, unique_labels)
+    return sil, db, ch, wss, bss, wb, dunn
+if X_tho is not None:
+    # 1. Yêu cầu nhập số cụm
+    n_clusters = int(input("\n=> Nhập số lượng cụm (n_clusters) dựa vào bảng Gamma ở trên: "))
+
+    print(f"\nĐang thực thi lan truyền nhãn cho {n_clusters} cụm...")
+
+
+    # 2. GỌI THUẬT TOÁN 1: Lan truyền vùng lõi (BFS)
+    labels_tam_thoi, centers = lan_truyen_vung_loi_bfs(dist_matrix, mknn, gamma_list, n_clusters)
+
+    # 3. GỌI THUẬT TOÁN 2: Lan truyền vùng biên (Xác suất)
+    labels_chinh_thuc = lan_truyen_xac_suat(dist_matrix, S, mknn, labels_tam_thoi, n_clusters)
+
+    # 4. Tính toán chỉ số và Trực quan hóa
+    metrics = calculate_internal_metrics(X_norm, labels_chinh_thuc, dist_matrix)
+    if metrics:
+        sil, db, ch, wss, bss, wb, dunn = metrics
+        print("\n" + "="*45)
+        print(" KẾT QUẢ ĐÁNH GIÁ CHẤT LƯỢNG PHÂN CỤM NỘI TẠI")
+        print("="*45)
+        print(f"{'Chỉ số':<25} | {'Giá trị':<10} | {'Kỳ vọng'}")
+        print("-" * 45)
+        print(f"{'Silhouette Score':<25} | {sil:<10.4f} | Gần 1 (Tốt)")
+        print(f"{'Davies-Bouldin (DB)':<25} | {db:<10.4f} | Thấp (Tốt)")
+        print(f"{'Calinski-Harabasz (CH)':<25} | {ch:<10.4f} | Cao (Tốt)")
+        print(f"{'Dunn Index':<25} | {dunn:<10.4f} | Cao (Tốt)")
+        print(f"{'WSS (Nội cụm)':<25} | {wss:<10.4f} | Thấp")
+        print(f"{'BSS (Liên cụm)':<25} | {bss:<10.4f} | Cao")
+        print(f"{'WB Index (WSS/BSS)':<25} | {wb:<10.4f} | Thấp (Tốt)")
+        print("-" * 45)
+
+    X_plot = [pt[0] for pt in X_tho]
+    Y_plot = [pt[1] for pt in X_tho]
+
+    plt.figure(figsize=(12, 8))
+    scatter = plt.scatter(X_plot, Y_plot, c=labels_chinh_thuc, cmap='tab10', s=25, alpha=0.9)
+
+    for c_idx in centers:
+        plt.scatter(X_tho[c_idx][0], X_tho[c_idx][1], c='red', marker='X', s=200, edgecolors='black', linewidths=1.5, zorder=5)
+
+    title_mode_str = "Bản Cải Tiến (Trung bình điều hòa)" if DUNG_CAI_TIEN else "Bản Gốc (WMKNNDPC)"
+    plt.title(f"Bản đồ Gom cụm - {title_mode_str}\n(Số cụm: {n_clusters} | k = {K_NEIGHBORS})", fontsize=12, fontweight='bold')
+    plt.xlabel("(NEAR_X)")
+    plt.ylabel("(NEAR_Y)")
+
+
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.show()
